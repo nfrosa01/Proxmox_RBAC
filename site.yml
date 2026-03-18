@@ -1,0 +1,29 @@
+---
+# Update Proxmox group membership for LDAP users
+
+- name: Update PVE Groups for LDAP Users
+  hosts: "{{ pve_rbac_node | default('pve01') }}"
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Preflight — show node
+      debug:
+        msg: 
+          rbac_node_inventory_hostname: "{{ inventory_hostname }}"
+          pve_rbac_node_var: "{{ pve_rbac_node | default('pve01') }}"
+
+    - name: Read CSV (users) on controller
+      ansible.builtin.read_csv:
+        path: "{{ users_csv_path }}"
+      register: users_csv
+      delegate_to: localhost
+      run_once: true
+
+    - name: Show first CSV row
+      debug:
+        var: users_csv.list[0]
+      run_once: true
+
+  roles:
+    - { role: groups, tasks_from: group_membership.yml }
