@@ -27,10 +27,10 @@
   run_once: true
 
 # Load the full PVE user table (used to validate user existence & realm spelling)
-#- name: Load current PVE user table
-#  ansible.builtin.command: "pveum user list"
-#  register: pve_users_table
-#  changed_when: false
+- name: Load current PVE user table
+  ansible.builtin.command: "pveum user list"
+  register: pve_users_table
+  changed_when: false
 
 # Get the current groups for each CSV user (exact userid@realm match).
 - name: Get current PVE groups for each user
