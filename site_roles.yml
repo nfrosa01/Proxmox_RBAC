@@ -1,0 +1,30 @@
+---
+- name: Create/Update Proxmox custom roles from CSV
+  hosts: "{{ pve_rbac_node | default('pve01') }}"
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Preflight — show node
+      debug:
+        msg:
+          hostname: "{{ inventory_hostname }}"
+          rbac_node: "{{ pve_rbac_node | default('pve01') }}"
+
+    - name: Read roles.csv
+      ansible.builtin.read_csv:
+        path: "{{ roles_csv_path }}"
+      register: roles_csv
+      delegate_to: localhost
+      run_once: true
+
+    - name: Share parsed CSV to all hosts
+      ansible.builtin.set_fact:
+        roles_csv_list: "{{ roles_csv.list }}"
+      run_once: true
+
+  tasks:
+    - name: Import role manager
+      import_role:
+        name: roles
+        tasks_from: roles_from_csv.yml
