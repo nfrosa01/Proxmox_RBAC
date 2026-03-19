@@ -1,0 +1,3 @@
+roleid,privs
+dart_read_test,Datastore.Audit,Mapping.Audit,Pool.Audit,SDN.Audit,Sys.Audit,VM.Audit
+
