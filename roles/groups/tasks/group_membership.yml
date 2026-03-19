@@ -1,18 +1,16 @@
 ---
-# roles/groups/tasks/(main|group_membership).yml
-# Purpose: Ensure PVE RBAC groups exist (optional) and update membership for LDAP-backed users.
-# Assumptions:
-# - 'users_csv_list' is already set by a pre_task in site.yml
-# - CSV schema: username, realm, groups (groups can be comma-separated)
+# roles/groups/tasks/group_membership.yml
+# Update group membership for LDAP-synced users in Proxmox
 
-# MARKER: shows which physical file ran in the job log (Ansible prints the real file path).
-- name: MARKER — unified groups membership task file is executing
+- name: MARKER — groups/group_membership.yml executing
   debug:
-    msg:
-      - "Running unified groups membership logic"
-      - "If line numbers still show main.yml, it means this file is main.yml; if group_membership.yml, likewise."
+    msg: "Running groups membership (LDAP users)"
 
-# (Optional) derive PVE group names from CSV (enable creation block if you want auto-create)
+# Derive PVE group names from CSV 'groups' column.
+# Notes:
+# - we remove whitespace with regex_replace
+# - we split on commas into a list
+# - we flatten and unique the result
 - name: Derive groups from CSV
   ansible.builtin.set_fact:
     _csv_groups: >-
@@ -20,34 +18,21 @@
         users_csv_list
         | map(attribute='groups')
         | select('defined')
-        | map('regex_replace','\\s+','')  # strip spaces
-        | map('split', ',')               # split comma lists
+        | map('regex_replace','\\s+','')
+        | map('split', ',')
         | flatten
-        | reject('equalto','')            # drop empty
+        | reject('equalto','')
         | unique
       }}
   run_once: true
 
-# --- OPTIONAL: uncomment to auto-create PVE groups from CSV before assignment ---
-# - name: Ensure PVE groups exist
-#   ansible.builtin.command: "pveum group add {{ item }} --comment 'Created by Ansible'"
-#   loop: "{{ _csv_groups }}"
-#   loop_control:
-#     label: "{{ item }}"
-#   register: group_add
-#   changed_when: group_add.rc == 0
-#   failed_when: >
-#     (group_add.rc != 0)
-#     and ('already exists' not in (group_add.stderr | default('')))
-# -------------------------------------------------------------------------------
-
-# Load the full PVE user table once (used to validate user existence & realm spelling)
+# Load the full PVE user table (used to validate user existence & realm spelling)
 - name: Load current PVE user table
   ansible.builtin.command: "pveum user list"
   register: pve_users_table
   changed_when: false
 
-# Read current groups for each user in CSV (exact match on userid@realm)
+# Get the current groups for each CSV user (exact userid@realm match).
 - name: Get current PVE groups for each user
   ansible.builtin.shell: |
     set -o pipefail
@@ -60,19 +45,19 @@
   register: current_groups
   changed_when: false
 
-# Compute desired groups string per-row (normalized from CSV ‘groups’ column)
+# Compute the desired groups string per user from CSV (normalize spaces).
 - name: Compute desired groups list per user (normalized CSV)
   ansible.builtin.set_fact:
     _desired_groups_list: >-
       {{
         users_csv_list
         | map(attribute='groups')
-        | map('regex_replace','\\s+','')  # remove spaces
+        | map('regex_replace','\\s+','')
         | list
       }}
   run_once: true
 
-# DEBUG summary so you can see exactly why the modify will run/skip
+# DEBUG — show decision inputs so it's obvious why we run or skip
 - name: DEBUG | current vs desired (per user)
   ansible.builtin.debug:
     msg:
@@ -90,7 +75,7 @@
   loop_control:
     index_var: idx
 
-# Apply membership only if user exists and current != desired
+# Apply only if user exists and current != desired.
 - name: Apply PVE group membership when different
   ansible.builtin.command: >
     pveum user modify {{ users_csv_list[idx].username }}@{{ users_csv_list[idx].realm }}
@@ -106,5 +91,5 @@
   register: mod_membership
   changed_when: mod_membership.rc == 0
   failed_when: mod_membership.rc not in [0, 2]
-  # If you want it to run even when someone toggles --check:
+  # Uncomment if you want this to execute even when someone runs the template with --check:
   # check_mode: no
