@@ -1,6 +1,4 @@
 ---
-# Update Proxmox group membership for LDAP users
-
 - name: Update PVE Groups for LDAP Users
   hosts: "{{ pve_rbac_node | default('pve01') }}"
   become: true
@@ -9,7 +7,7 @@
   pre_tasks:
     - name: Preflight — show node
       debug:
-        msg: 
+        msg:
           rbac_node_inventory_hostname: "{{ inventory_hostname }}"
           pve_rbac_node_var: "{{ pve_rbac_node | default('pve01') }}"
 
@@ -20,10 +18,18 @@
       delegate_to: localhost
       run_once: true
 
+    - name: Share parsed CSV to all hosts
+      ansible.builtin.set_fact:
+        users_csv_list: "{{ users_csv.list }}"
+      run_once: true
+
     - name: Show first CSV row
       debug:
         var: users_csv.list[0]
       run_once: true
 
-  roles:
-    - { role: groups, tasks_from: group_membership.yml }
+  tasks:
+    - name: MARKER — importing groups:group_membership.yml explicitly
+      import_role:
+        name: groups
+        tasks_from: group_membership.yml
