@@ -4,4 +4,4 @@ pve_rbac_node: "pve01"
 # CSV path inside this repo
 # Required columns: username, realm, groups
 users_csv_path: "{{ playbook_dir }}/files/users.csv"
-roles_csv_path: "{{ playbook_dir }}/files/roles.csv
+roles_csv_path: "{{ playbook_dir }}/files/roles.csv"
