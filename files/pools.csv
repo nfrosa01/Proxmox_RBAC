@@ -1,2 +1,2 @@
 poolid,comment,vms,storage,allow_move,enforce_membership
-stormagic,,"100,101",,0,0
+stormagic,,"101,102","local-lvim",1,0
