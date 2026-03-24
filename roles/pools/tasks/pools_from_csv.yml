@@ -1,35 +1,198 @@
 ---
-- name: Ensure Proxmox Pools and Memberships from CSV
-  hosts: "{{ pve_rbac_node | default('pve01') }}"
-  become: true
-  gather_facts: false
+# roles/pools/tasks/pools_from_csv.yml
 
-  pre_tasks:
-    - name: Preflight — node
-      debug:
-        msg:
-          rbac_node_inventory_hostname: "{{ inventory_hostname }}"
-          pve_rbac_node_var: "{{ pve_rbac_node | default('pve01') }}"
+- name: MARKER — pools_from_csv starting
+  debug:
+    msg: "Managing pools from CSV"
 
-    - name: Read pools.csv on controller
-      ansible.builtin.read_csv:
-        path: "{{ pools_csv_path }}"
-      register: pools_csv
-      delegate_to: localhost
-      run_once: true
+# Normalize list helpers (per row)
+- name: Build normalized lists (vms/storage) per row
+  ansible.builtin.set_fact:
+    _desired_vms: >-
+      {{
+        pools_csv_list
+        | map(attribute='vms')
+        | map('default','')
+        | map('regex_replace','\\s+','')
+        | map('split',',')
+        | map('reject','equalto','')
+        | list
+      }}
+    _desired_storage: >-
+      {{
+        pools_csv_list
+        | map(attribute='storage')
+        | map('default','')
+        | map('regex_replace','\\s+','')
+        | map('split',',')
+        | map('reject','equalto','')
+        | list
+      }}
+  run_once: true
 
-    - name: Share parsed CSV
-      ansible.builtin.set_fact:
-        pools_csv_list: "{{ pools_csv.list }}"
-      run_once: true
+# 1) Create pool when absent (and set comment)
+- name: Ensure pool exists (create if missing)
+  ansible.builtin.command: >
+    pveum pool add {{ pools_csv_list[idx].poolid }}
+    {{ ('--comment "' ~ (pools_csv_list[idx].comment | default('')) ~ '"') if (pools_csv_list[idx].comment | default('')) else '' }}
+  loop: "{{ range(0, pools_csv_list | length) | list }}"
+  loop_control:
+    index_var: idx
+    label: "{{ pools_csv_list[idx].poolid }}"
+  register: pool_add
+  changed_when: pool_add.rc == 0
+  failed_when: >
+    (pool_add.rc != 0) and
+    ('already exists' not in (pool_add.stderr | default('')))
+  # If missing, this creates. If exists, command may error “already exists” -> handled.
 
-    - name: Preview first CSV row
-      debug:
-        var: pools_csv.list[0]
-      run_once: true
+# 2) Update comment if different (idempotent)
+- name: Update pool comment when different
+  ansible.builtin.shell: |
+    set -o pipefail
+    cur="$(pveum pool list --poolid {{ pools_csv_list[idx].poolid }} | awk 'NR>2{print $0}' )"
+    # crude match: if desired comment is non-empty and not contained, update
+    if [ -n "{{ pools_csv_list[idx].comment | default('') | quote }}" ]; then
+      echo "$cur" | grep -F -- {{ pools_csv_list[idx].comment | quote }} >/dev/null 2>&1 || \
+      pveum pool modify {{ pools_csv_list[idx].poolid }} --comment {{ pools_csv_list[idx].comment | quote }}
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ range(0, pools_csv_list | length) | list }}"
+  loop_control:
+    index_var: idx
+    label: "{{ pools_csv_list[idx].poolid }}"
+  register: pool_comment
+  changed_when: "'modify' in (pool_comment.stdout | default('')) or (pool_comment.rc | default(0)) == 0 and (pool_comment.stdout | default('')) == ''"
+  failed_when: false
 
-  tasks:
-    - name: Import pools role
-      import_role:
-        name: pools
-        tasks_from: pools_from_csv.yml
+# 3) Read current membership via API (JSON)
+- name: Read current pool config (members) via pvesh
+  ansible.builtin.command: >
+    pvesh get /pools/{{ pools_csv_list[idx].poolid }}
+  loop: "{{ range(0, pools_csv_list | length) | list }}"
+  loop_control:
+    index_var: idx
+    label: "{{ pools_csv_list[idx].poolid }}"
+  register: pool_json
+  changed_when: false
+  failed_when: false  # if missing (shouldn't happen after 'add'), skip gracefully
+
+# Extract current members (VMIDs and storage) from JSON text
+- name: Parse current members for each pool
+  ansible.builtin.set_fact:
+    _current_vms: >-
+      {{
+        pool_json.results
+        | map(attribute='stdout')
+        | map('default','{}')
+        | map('from_json', default={})
+        | map('extract', 'members')
+        | map('default', [])
+        | map('selectattr', 'type', 'in', ['qemu','lxc'])
+        | map('map', attribute='vmid')
+        | map('list')
+        | list
+      }}
+    _current_storage: >-
+      {{
+        pool_json.results
+        | map(attribute='stdout')
+        | map('default','{}')
+        | map('from_json', default={})
+        | map('extract', 'members')
+        | map('default', [])
+        | map('selectattr', 'type', 'equalto', 'storage')
+        | map('map', attribute='storage')
+        | map('list')
+        | list
+      }}
+  run_once: true
+
+# 4) Compute adds/removes for VMs
+- name: Compute VMIDs to add/remove
+  ansible.builtin.set_fact:
+    _vm_add: >-
+      {{
+        range(0, pools_csv_list | length) | list
+        | map('map', 'string') | list
+      }}
+  run_once: true
+
+- name: VM add/remove (per pool)
+  ansible.builtin.set_fact:
+    _vm_add_list: "{{ (_desired_vms[idx] | difference(_current_vms[idx] | map('string') | list)) | list }}"
+    _vm_del_list: "{{ (_current_vms[idx] | map('string') | list | difference(_desired_vms[idx])) | list }}"
+  loop: "{{ range(0, pools_csv_list | length) | list }}"
+  loop_control:
+    index_var: idx
+
+# 5) Compute adds/removes for storage
+- name: Compute storage add/remove (per pool)
+  ansible.builtin.set_fact:
+    _st_add_list: "{{ (_desired_storage[idx] | difference(_current_storage[idx])) | list }}"
+    _st_del_list: "{{ (_current_storage[idx] | difference(_desired_storage[idx])) | list }}"
+  loop: "{{ range(0, pools_csv_list | length) | list }}"
+  loop_control:
+    index_var: idx
+
+# 6) APPLY: add VMIDs (with optional allow-move)
+- name: Add VMIDs to pool (batched)
+  ansible.builtin.command: >
+    pveum pool modify {{ pools_csv_list[idx].poolid }}
+    --vms {{ _vm_add_list | join(',') }}
+    {{ '--allow-move 1' if (pools_csv_list[idx].allow_move | default('0') | int) == 1 else '' }}
+  loop: "{{ range(0, pools_csv_list | length) | list }}"
+  loop_control:
+    index_var: idx
+    label: "{{ pools_csv_list[idx].poolid }} :: add-vms={{ _vm_add_list | length }}"
+  when: _vm_add_list | length > 0
+  register: vm_add
+  changed_when: vm_add.rc == 0
+  failed_when: vm_add.rc not in [0]
+  # Uncomment if you want to execute even in --check
+  # check_mode: no
+
+# 7) APPLY: remove VMIDs (only when enforce_membership=1)
+- name: Remove VMIDs from pool (enforce)
+  ansible.builtin.command: >
+    pveum pool modify {{ pools_csv_list[idx].poolid }}
+    --vms {{ _vm_del_list | join(',') }}
+    --delete 1
+  loop: "{{ range(0, pools_csv_list | length) | list }}"
+  loop_control:
+    index_var: idx
+    label: "{{ pools_csv_list[idx].poolid }} :: del-vms={{ _vm_del_list | length }}"
+  when: (_vm_del_list | length > 0) and ((pools_csv_list[idx].enforce_membership | default('0') | int) == 1)
+  register: vm_del
+  changed_when: vm_del.rc == 0
+  failed_when: vm_del.rc not in [0]
+
+# 8) APPLY: add storage
+- name: Add storage IDs to pool (batched)
+  ansible.builtin.command: >
+    pveum pool modify {{ pools_csv_list[idx].poolid }}
+    --storage {{ _st_add_list | join(',') }}
+  loop: "{{ range(0, pools_csv_list | length) | list }}"
+  loop_control:
+    index_var: idx
+    label: "{{ pools_csv_list[idx].poolid }} :: add-storage={{ _st_add_list | length }}"
+  when: _st_add_list | length > 0
+  register: st_add
+  changed_when: st_add.rc == 0
+  failed_when: st_add.rc not in [0]
+
+# 9) APPLY: remove storage (only when enforce_membership=1)
+- name: Remove storage from pool (enforce)
+  ansible.builtin.command: >
+    pveum pool modify {{ pools_csv_list[idx].poolid }}
+    --storage {{ _st_del_list | join(',') }}
+    --delete 1
+  loop: "{{ range(0, pools_csv_list | length) | list }}"
+  loop_control:
+    index_var: idx
+    label: "{{ pools_csv_list[idx].poolid }} :: del-storage={{ _st_del_list | length }}"
+  when: (_st_del_list | length > 0) and ((pools_csv_list[idx].enforce_membership | default('0') | int) == 1)
+  register: st_del
+  changed_when: st_del.rc == 0
+  failed_when: st_del.rc not in [0]
