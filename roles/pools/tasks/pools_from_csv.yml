@@ -1,173 +1,50 @@
 ---
 # roles/pools/tasks/pools_from_csv.yml
-# Clean, simple, reliable pool management for Proxmox
+# Simple READ-ONLY version: List pools and members
 
-- name: MARKER — pools_from_csv starting
+- name: MARKER — Listing Proxmox Pools
   debug:
-    msg: "Managing pools from CSV"
+    msg: "Listing all pools, comments, and members"
 
 ###############################################################################
-# 1. Normalize CSV rows (vms/storage → list of strings)
+# 1. Query pools via Proxmox API in JSON format
 ###############################################################################
-- name: Normalize CSV rows
-  ansible.builtin.set_fact:
-    pools_clean: >-
-      {{
-        pools_csv_list
-        | map('combine', {
-            'desired_vms': (
-              item.vms | default('') | string | trim
-              | split(',') | map('trim') | reject('equalto','') | list
-            ),
-            'desired_storage': (
-              item.storage | default('') | string | trim
-              | split(',') | map('trim') | reject('equalto','') | list
-            ),
-            'allow_move': (item.allow_move | default('0') | int),
-            'enforce_membership': (item.enforce_membership | default('0') | int)
-          })
-        | list
-      }}
-
-###############################################################################
-# 2. Ensure pools exist (create if missing)
-###############################################################################
-- name: Ensure pool exists
-  ansible.builtin.shell: |
-    if ! pveum pool list | awk '{print $1}' | grep -Fxq "{{ item.poolid }}"; then
-      pveum pool add "{{ item.poolid }}" --comment "{{ item.comment | default('') }}"
-    fi
-  args:
-    executable: /bin/bash
-  loop: "{{ pools_clean }}"
-  loop_control:
-    label: "{{ item.poolid }}"
-  register: pool_add
-  changed_when: false
-  failed_when: false
-
-###############################################################################
-# 3. Get ALL pool membership via REAL JSON
-###############################################################################
-- name: Query ALL pools via JSON
+- name: Fetch all pools (JSON)
   ansible.builtin.command: >
     pvesh get /pools --output-format json
   register: all_pools_json
   changed_when: false
 
-- name: Convert JSON
+###############################################################################
+# 2. Parse JSON
+###############################################################################
+- name: Convert pools JSON
   ansible.builtin.set_fact:
     all_pools: "{{ all_pools_json.stdout | from_json }}"
 
 ###############################################################################
-# 4. Merge desired + current per pool
+# 3. Display each pool’s ID, comment, and members
 ###############################################################################
-- name: Build pool_rows
-  ansible.builtin.set_fact:
-    pool_rows: >-
-      {{
-        pools_clean
-        | map('combine', {
-            'current_members':
-              (all_pools
-               | selectattr('poolid','equalto', item.poolid)
-               | map(attribute='members')
-               | first
-               | default([])
-              )
-          })
-        | list
-      }}
-
-###############################################################################
-# 5. Extract current VMs + storage from current_members
-###############################################################################
-- name: Normalize current VMIDs + storage
-  ansible.builtin.set_fact:
-    pool_rows: >-
-      {{
-        pool_rows
-        | map('combine', {
-            'current_vms': (
-              item.current_members
-              | selectattr('type','in',['qemu','lxc'])
-              | map(attribute='vmid')
-              | map('string')
-              | list
-            ),
-            'current_storage': (
-              item.current_members
-              | selectattr('type','equalto','storage')
-              | map(attribute='storage')
-              | list
-            )
-          })
-        | list
-      }}
-
-###############################################################################
-# 6. ADD VMs
-###############################################################################
-- name: Add VMs to pool
-  ansible.builtin.command: >
-    pveum pool modify {{ item.poolid }}
-    --vms {{ (item.desired_vms | difference(item.current_vms)) | join(',') }}
-    {{ '--allow-move 1' if item.allow_move == 1 else '' }}
-  loop: "{{ pool_rows }}"
+- name: Show pool details
+  ansible.builtin.debug:
+    msg:
+      poolid: "{{ item.poolid }}"
+      comment: "{{ item.comment | default('') }}"
+      vm_members: >-
+        {{
+          item.members
+          | selectattr('type','in',['qemu','lxc'])
+          | map(attribute='vmid')
+          | map('string')
+          | list
+        }}
+      storage_members: >-
+        {{
+          item.members
+          | selectattr('type','equalto','storage')
+          | map(attribute='storage')
+          | list
+        }}
+  loop: "{{ all_pools }}"
   loop_control:
     label: "{{ item.poolid }}"
-  when: (item.desired_vms | difference(item.current_vms)) | length > 0
-  register: vm_add
-  changed_when: vm_add.rc == 0
-  failed_when: vm_add.rc not in [0]
-
-###############################################################################
-# 7. REMOVE VMs if enforce_membership=1
-###############################################################################
-- name: Remove VMs from pool (enforced)
-  ansible.builtin.command: >
-    pveum pool modify {{ item.poolid }}
-    --vms {{ (item.current_vms | difference(item.desired_vms)) | join(',') }}
-    --delete 1
-  loop: "{{ pool_rows }}"
-  loop_control:
-    label: "{{ item.poolid }}"
-  when:
-    - item.enforce_membership == 1
-    - (item.current_vms | difference(item.desired_vms)) | length > 0
-  register: vm_del
-  changed_when: vm_del.rc == 0
-  failed_when: vm_del.rc not in [0]
-
-###############################################################################
-# 8. ADD storage
-###############################################################################
-- name: Add storage to pool
-  ansible.builtin.command: >
-    pveum pool modify {{ item.poolid }}
-    --storage {{ (item.desired_storage | difference(item.current_storage)) | join(',') }}
-  loop: "{{ pool_rows }}"
-  loop_control:
-    label: "{{ item.poolid }}"
-  when: (item.desired_storage | difference(item.current_storage)) | length > 0
-  register: st_add
-  changed_when: st_add.rc == 0
-  failed_when: st_add.rc not in [0]
-
-###############################################################################
-# 9. REMOVE storage if enforce_membership=1
-###############################################################################
-- name: Remove storage from pool (enforced)
-  ansible.builtin.command: >
-    pveum pool modify {{ item.poolid }}
-    --storage {{ (item.current_storage | difference(item.desired_storage)) | join(',') }}
-    --delete 1
-  loop: "{{ pool_rows }}"
-  loop_control:
-    label: "{{ item.poolid }}"
-  when:
-    - item.enforce_membership == 1
-    - (item.current_storage | difference(item.desired_storage)) | length > 0
-  register: st_del
-  changed_when: st_del.rc == 0
-  failed_when: st_del.rc not in [0]
