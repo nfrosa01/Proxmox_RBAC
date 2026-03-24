@@ -1,4 +1,3 @@
-poolid,comment,vms,storage,allow_move,enforce_membership
-Network,Created by Ansible,"101,102","local,ceph-data",1,0
-Backup,Long-term backups only,,"pbs-storage",0,0
-WebTier,Web VMs in one pool,"201,202,203","",1,1
+poolid,comment
+Backup,Long-term backups only
+
