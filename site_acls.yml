@@ -1,0 +1,35 @@
+---
+- name: Apply Proxmox ACLs from CSV
+  hosts: "{{ pve_rbac_node | default('pve01') }}"
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Preflight — show target node
+      debug:
+        msg:
+          rbac_node_inventory_hostname: "{{ inventory_hostname }}"
+          pve_rbac_node_var: "{{ pve_rbac_node | default('pve01') }}"
+
+    - name: Read acls.csv on controller
+      ansible.builtin.read_csv:
+        path: "{{ acls_csv_path }}"
+      register: acls_csv
+      delegate_to: localhost
+      run_once: true
+
+    - name: Share parsed ACL CSV to all hosts
+      ansible.builtin.set_fact:
+        acls_csv_list: "{{ acls_csv.list }}"
+      run_once: true
+
+    - name: Preview first ACL row
+      debug:
+        var: acls_csv.list[0]
+      run_once: true
+
+  tasks:
+    - name: Import ACL manager
+      import_role:
+        name: acls
+        tasks_from: acl_from_csv.yml
