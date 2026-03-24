@@ -1,38 +1,61 @@
 ---
-# roles/pools/tasks/pools_from_csv.yml
-# Simple READ-ONLY version: List pools and members
+# READ‑ONLY: list all pools + comments + members
 
-- name: MARKER — Listing Proxmox Pools
+- name: MARKER — Listing all pools with members
   debug:
-    msg: "Listing all pools, comments, and members"
+    msg: "Collecting Proxmox pool information"
 
 ###############################################################################
-# 1. Query pools via Proxmox API in JSON format
+# 1. Get list of pools (no members here)
 ###############################################################################
-- name: Fetch all pools (JSON)
+- name: Fetch pool list (top level)
   ansible.builtin.command: >
     pvesh get /pools --output-format json
-  register: all_pools_json
+  register: pool_list_raw
   changed_when: false
 
-###############################################################################
-# 2. Parse JSON
-###############################################################################
-- name: Convert pools JSON
+- name: Parse pool list JSON
   ansible.builtin.set_fact:
-    all_pools: "{{ all_pools_json.stdout | from_json }}"
+    pool_list: "{{ pool_list_raw.stdout | from_json }}"
 
 ###############################################################################
-# 3. Display each pool’s ID, comment, and members
+# 2. For each pool → fetch details with members
 ###############################################################################
-- name: Show pool details
+- name: Fetch full pool details including members
+  ansible.builtin.command: >
+    pvesh get /pools/{{ item.poolid }} --output-format json
+  loop: "{{ pool_list }}"
+  loop_control:
+    label: "{{ item.poolid }}"
+  register: pool_details_raw
+  changed_when: false
+  failed_when: false
+
+###############################################################################
+# 3. Parse each detail response safely
+###############################################################################
+- name: Build structured pool info
+  ansible.builtin.set_fact:
+    pools_full: >-
+      {{
+        pool_details_raw.results
+        | map(attribute='stdout')
+        | map('default','{}')
+        | map('from_json')
+        | list
+      }}
+
+###############################################################################
+# 4. Display results
+###############################################################################
+- name: Display pool info
   ansible.builtin.debug:
     msg:
       poolid: "{{ item.poolid }}"
       comment: "{{ item.comment | default('') }}"
       vm_members: >-
         {{
-          item.members
+          (item.members | default([]))
           | selectattr('type','in',['qemu','lxc'])
           | map(attribute='vmid')
           | map('string')
@@ -40,11 +63,11 @@
         }}
       storage_members: >-
         {{
-          item.members
+          (item.members | default([]))
           | selectattr('type','equalto','storage')
           | map(attribute='storage')
           | list
         }}
-  loop: "{{ all_pools }}"
+  loop: "{{ pools_full }}"
   loop_control:
     label: "{{ item.poolid }}"
