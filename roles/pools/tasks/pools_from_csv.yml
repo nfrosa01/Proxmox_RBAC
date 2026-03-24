@@ -59,21 +59,7 @@
 ###############################################################################
 # 4. Build full per-pool objects combining desired + current
 ###############################################################################
-- name: Build pool_rows
-  ansible.builtin.set_fact:
-    pool_rows: >-
-      {{
-        range(0, pools_clean | length)
-        | map('int')
-        | map('extract', pools_clean, pools_pvesh.results)
-        | list
-      }}
-  vars:
-    extract: |
-      {% raw %}
-      {% endraw %}
 
-# Manual safe extractor:
 - name: Build pool_rows (final)
   ansible.builtin.set_fact:
     pool_rows: >-
@@ -81,7 +67,7 @@
         range(0, pools_clean | length)
         | list
         | map('int')
-        | map('community.general.dict_merge', {
+        | map('extract', {
             'poolid': pools_clean[item].poolid,
             'comment': pools_clean[item].comment,
             'desired_vms': pools_clean[item].desired_vms,
@@ -91,6 +77,10 @@
             'current_members': (pools_pvesh.results[item].stdout | from_json).members | default([])
           })
       }}
+  vars:
+    extract: |
+      {% raw %}
+      {% endraw %}
 
 ###############################################################################
 # 5. Extract current VMIDs + storage
