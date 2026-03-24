@@ -1,3 +1,2 @@
-poolid,comment
-Backup,Long-term backups only
-
+poolid,comment,vms,storage,allow_move,enforce_membership
+stormagic,,"100,101",,0,0
