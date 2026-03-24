@@ -1,0 +1,35 @@
+---
+- name: Ensure Proxmox Pools and Memberships from CSV
+  hosts: "{{ pve_rbac_node | default('pve01') }}"
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Preflight — node
+      debug:
+        msg:
+          rbac_node_inventory_hostname: "{{ inventory_hostname }}"
+          pve_rbac_node_var: "{{ pve_rbac_node | default('pve01') }}"
+
+    - name: Read pools.csv on controller
+      ansible.builtin.read_csv:
+        path: "{{ pools_csv_path }}"
+      register: pools_csv
+      delegate_to: localhost
+      run_once: true
+
+    - name: Share parsed CSV
+      ansible.builtin.set_fact:
+        pools_csv_list: "{{ pools_csv.list }}"
+      run_once: true
+
+    - name: Preview first CSV row
+      debug:
+        var: pools_csv.list[0]
+      run_once: true
+
+  tasks:
+    - name: Import pools role
+      import_role:
+        name: pools
+        tasks_from: pools_from_csv.yml
