@@ -59,7 +59,6 @@
 ###############################################################################
 # 4. Build full per-pool objects combining desired + current
 ###############################################################################
-
 - name: Build pool_rows (final)
   ansible.builtin.set_fact:
     pool_rows: >-
