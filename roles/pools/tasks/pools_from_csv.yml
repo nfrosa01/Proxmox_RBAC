@@ -1,28 +1,34 @@
 ---
 # roles/pools/tasks/pools_from_csv.yml
-# Clean, fully-updating pool automation for Ansible 2.13
+# Clean & Ansible-2.13 compatible, supporting VMIDs + storage with enforce mode
 
 - name: MARKER — pools_from_csv starting
   debug:
     msg: "Managing pools from CSV"
 
 ###############################################################################
-# 1) Normalize CSV into structured objects
+# 1. Normalize CSV rows (vms/storage → lists of strings)
 ###############################################################################
-- name: Normalize CSV into per-pool objects
+- name: Normalize CSV rows
   ansible.builtin.set_fact:
     pools_clean: >-
       {{
-        pools_csv_list | map('combine', {
-          'desired_vms': (item.vms | default('') | trim | split(',') | reject('equalto','')),
-          'desired_storage': (item.storage | default('') | trim | split(',') | reject('equalto','')),
-          'allow_move': (item.allow_move | default('0') | int),
-          'enforce_membership': (item.enforce_membership | default('0') | int),
-        }) | list
+        pools_csv_list
+        | map('combine', {
+            'desired_vms': (
+              item.vms | default('') | string | trim | split(',') | map('trim') | reject('equalto','') | list
+            ),
+            'desired_storage': (
+              item.storage | default('') | string | trim | split(',') | map('trim') | reject('equalto','') | list
+            ),
+            'allow_move': (item.allow_move | default('0') | int),
+            'enforce_membership': (item.enforce_membership | default('0') | int)
+          })
+        | list
       }}
 
 ###############################################################################
-# 2) Ensure pool exists (create only if missing)
+# 2. Ensure pools exist (create if missing)
 ###############################################################################
 - name: Ensure pool exists
   ansible.builtin.shell: |
@@ -39,102 +45,106 @@
   failed_when: false
 
 ###############################################################################
-# 3) Read pool JSON from pvesh (cluster-wide API)
+# 3. Read current membership using pvesh
 ###############################################################################
-- name: Read pool JSON via pvesh
+- name: Query pool membership via pvesh
   ansible.builtin.command: >
     pvesh get /pools/{{ item.poolid }}
   loop: "{{ pools_clean }}"
   loop_control:
     label: "{{ item.poolid }}"
-  register: pool_json
+  register: pools_pvesh
   changed_when: false
 
 ###############################################################################
-# 4) Parse current membership safely (Ansible 2.13)
+# 4. Build full per-pool objects combining desired + current
 ###############################################################################
-- name: Build per-row merged structures
+- name: Build pool_rows
   ansible.builtin.set_fact:
     pool_rows: >-
       {{
         range(0, pools_clean | length)
         | map('int')
-        | map('extract', pools_clean)
-        | zip(pool_json.results)
-        | map('community.general.dict_merge', {})    # required for zip merge
+        | map('extract', pools_clean, pools_pvesh.results)
         | list
-      }}
-
-# But easier to construct explicitly:
-- name: Build pool_rows explicitly (safe)
-  ansible.builtin.set_fact:
-    pool_rows: >-
-      {{
-        range(0, pools_clean | length)
-        | map('int')
-        | map('extract', {
-            'poolid': pools_clean[item].poolid,
-            'comment': pools_clean[item].comment,
-            'desired_vms': pools_clean[item].desired_vms,
-            'desired_storage': pools_clean[item].desired_storage,
-            'allow_move': pools_clean[item].allow_move,
-            'enforce_membership': pools_clean[item].enforce_membership,
-            'current_json': (pool_json.results[item].stdout | from_json)
-          })
       }}
   vars:
     extract: |
       {% raw %}
       {% endraw %}
 
-###############################################################################
-# 5) Compute diffs: VMs and Storage
-###############################################################################
-- name: Compute membership diffs
+# Manual safe extractor:
+- name: Build pool_rows (final)
   ansible.builtin.set_fact:
-    pools_with_diffs: >-
+    pool_rows: >-
       {{
-        pool_rows | map('combine', {
-          'current_vms': (item.current_json.members | default([])
-                         | selectattr('type','in',['qemu','lxc'])
-                         | map(attribute='vmid')
-                         | list),
-          'current_storage': (item.current_json.members | default([])
-                             | selectattr('type','equalto','storage')
-                             | map(attribute='storage')
-                             | list)
-        }) | list
+        range(0, pools_clean | length)
+        | list
+        | map('int')
+        | map('community.general.dict_merge', {
+            'poolid': pools_clean[item].poolid,
+            'comment': pools_clean[item].comment,
+            'desired_vms': pools_clean[item].desired_vms,
+            'desired_storage': pools_clean[item].desired_storage,
+            'allow_move': pools_clean[item].allow_move,
+            'enforce_membership': pools_clean[item].enforce_membership,
+            'current_members': (pools_pvesh.results[item].stdout | from_json).members | default([])
+          })
       }}
 
 ###############################################################################
-# 6) Apply additions: VMIDs
+# 5. Extract current VMIDs + storage
+###############################################################################
+- name: Normalize current VMIDs and storage
+  ansible.builtin.set_fact:
+    pool_rows: >-
+      {{
+        pool_rows
+        | map('combine', {
+            'current_vms': (
+              item.current_members
+              | selectattr('type', 'in', ['qemu','lxc'])
+              | map(attribute='vmid')
+              | map('string')
+              | list
+            ),
+            'current_storage': (
+              item.current_members
+              | selectattr('type', 'equalto', 'storage')
+              | map(attribute='storage')
+              | list
+            )
+          })
+        | list
+      }}
+
+###############################################################################
+# 6. Apply ADDs (VMs)
 ###############################################################################
 - name: Add VMIDs to pool
   ansible.builtin.command: >
     pveum pool modify {{ item.poolid }}
-    --vms {{ (item.desired_vms | difference(item.current_vms)
-             | join(',')) }}
+    --vms {{ (item.desired_vms | difference(item.current_vms)) | join(',') }}
     {{ '--allow-move 1' if item.allow_move == 1 else '' }}
-  loop: "{{ pools_with_diffs }}"
+  loop: "{{ pool_rows }}"
   loop_control:
-    label: "{{ item.poolid }}"
+    label: "{{ item.poolid }} add-vms"
   when: (item.desired_vms | difference(item.current_vms)) | length > 0
   register: vm_add
   changed_when: vm_add.rc == 0
   failed_when: vm_add.rc not in [0]
 
 ###############################################################################
-# 7) Apply removals: VMIDs (only if enforce_membership=1)
+# 7. Apply REMOVES (VMs) if enforce_membership=1
 ###############################################################################
-- name: Remove VMIDs from pool (enforce)
+- name: Remove VMIDs from pool (enforced)
   ansible.builtin.command: >
     pveum pool modify {{ item.poolid }}
-    --vms {{ (item.current_vms | difference(item.desired_vms)
-             | join(',')) }}
+    --vms {{ (item.current_vms | difference(item.desired_vms)) | join(',') }}
     --delete 1
-  loop: "{{ pools_with_diffs }}"
+  loop: "{{ pool_rows }}"
   loop_control:
-    label: "{{ item.poolid }}"
+    label: "{{ item.poolid }} del-vms"
   when:
     - item.enforce_membership == 1
     - (item.current_vms | difference(item.desired_vms)) | length > 0
@@ -143,33 +153,31 @@
   failed_when: vm_del.rc not in [0]
 
 ###############################################################################
-# 8) Apply additions: Storage
+# 8. Apply ADDs (storage)
 ###############################################################################
-- name: Add storage IDs to pool
+- name: Add storage to pool
   ansible.builtin.command: >
     pveum pool modify {{ item.poolid }}
-    --storage {{ (item.desired_storage | difference(item.current_storage)
-                 | join(',')) }}
-  loop: "{{ pools_with_diffs }}"
+    --storage {{ (item.desired_storage | difference(item.current_storage)) | join(',') }}
+  loop: "{{ pool_rows }}"
   loop_control:
-    label: "{{ item.poolid }}"
+    label: "{{ item.poolid }} add-storage"
   when: (item.desired_storage | difference(item.current_storage)) | length > 0
   register: st_add
   changed_when: st_add.rc == 0
   failed_when: st_add.rc not in [0]
 
 ###############################################################################
-# 9) Apply removals: Storage (only if enforce_membership=1)
+# 9. Apply REMOVES (storage) if enforce_membership=1
 ###############################################################################
-- name: Remove storage IDs from pool (enforce)
+- name: Remove storage from pool (enforced)
   ansible.builtin.command: >
     pveum pool modify {{ item.poolid }}
-    --storage {{ (item.current_storage | difference(item.desired_storage)
-                 | join(',')) }}
+    --storage {{ (item.current_storage | difference(item.desired_storage)) | join(',') }}
     --delete 1
-  loop: "{{ pools_with_diffs }}"
+  loop: "{{ pool_rows }}"
   loop_control:
-    label: "{{ item.poolid }}"
+    label: "{{ item.poolid }} del-storage"
   when:
     - item.enforce_membership == 1
     - (item.current_storage | difference(item.desired_storage)) | length > 0
