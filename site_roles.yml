@@ -1,3 +1,4 @@
+#This file is used by RBAC_roles template in Semaphore. Adjust priveleges in roles.csv in the files folder for any changes to a role.
 ---
 - name: Create/Update Proxmox custom roles from CSV
   hosts: "{{ pve_rbac_node | default('pve01') }}"
