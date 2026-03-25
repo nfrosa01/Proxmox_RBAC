@@ -1,14 +1,11 @@
 ---
 # READ-ONLY: show desired values from CSV + actual pool state from Proxmox
-
 - name: MARKER — Listing desired + current pool configuration
   debug:
     msg: "Loading CSV + comparing to Proxmox pool state"
-
 ###############################################################################
 # 1. Normalize CSV rows — SAFE LOOP (works in all Ansible versions)
 ###############################################################################
-
 - name: Initialize cleaned CSV list
   ansible.builtin.set_fact:
     pools_clean: []
@@ -38,28 +35,33 @@
   register: pool_details_raw
   changed_when: false
   failed_when: false
-
 ###############################################################################
 # 3. Build merged objects with current pool state
 ###############################################################################
+
 - name: Initialize merged list
   ansible.builtin.set_fact:
     pool_merged: []
 
-- name: Combine desired + current info row-by-row
+- name: Merge desired + current info (safe loop)
   ansible.builtin.set_fact:
     pool_merged: "{{ pool_merged + [ {
         'poolid': item.0.poolid,
-        'desired_comment': item.0.comment,
+
+        # desired values from CSV
+        'desired_comment': item.0.desired_comment,
         'desired_vms': item.0.desired_vms,
         'desired_storage': item.0.desired_storage,
         'allow_move': item.0.allow_move,
         'enforce_membership': item.0.enforce_membership,
+
+        # current values from Proxmox API
         'current': (item.1.stdout | from_json)
     } ] }}"
   loop: "{{ pools_clean | zip(pool_details_raw.results) }}"
   loop_control:
     label: "{{ item.0.poolid }}"
+
 ###############################################################################
 # 4. Display desired vs current state
 ###############################################################################
