@@ -85,7 +85,7 @@
                                        else 5 if item.subject_type=='user'
                                        else 6,
                                        'equalto', item.subject)
-                          | map('extract', 2)  # role column
+                          | map('extract', 2)  
                           | list,
 
         'current_prop': lookup('community.general.lines', pve_acl_table.stdout)
@@ -96,7 +96,7 @@
                                      else 5 if item.subject_type=='user'
                                      else 6,
                                      'equalto', item.subject)
-                        | map('extract', 3)  # propagate column
+                        | map('extract', 3) 
                         | list
     } ] }}"
   loop: "{{ acl_rows_normalized }}"
