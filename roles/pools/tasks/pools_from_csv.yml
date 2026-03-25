@@ -91,3 +91,29 @@
   loop: "{{ pool_merged }}"
   loop_control:
     label: "{{ item.poolid }}"
+###############################################################################
+# 5. Add missing VMs to pool
+###############################################################################
+- name: Add missing VMs to pool
+  ansible.builtin.command: >
+    pveum pool modify {{ item.poolid }}
+    --vms {{ (item.desired_vms | difference(item.current.members 
+                | selectattr('type','in',['qemu','lxc']) 
+                | map(attribute='vmid') 
+                | map('string') 
+                | list)) 
+                | join(',') }}
+  loop: "{{ pool_merged }}"
+  loop_control:
+    label: "{{ item.poolid }}"
+  when: >
+    (item.desired_vms | difference(
+      item.current.members
+      | selectattr('type','in',['qemu','lxc'])
+      | map(attribute='vmid')
+      | map('string')
+      | list
+    )) | length > 0
+  register: vm_add_result
+  changed_when: vm_add_result.rc == 0
+  failed_when: vm_add_result.rc not in [0]
