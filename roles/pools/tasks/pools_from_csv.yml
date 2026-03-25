@@ -1,121 +1,59 @@
 ---
-# READ-ONLY: show desired values from CSV + actual pool state from Proxmox
-- name: MARKER — Listing desired + current pool configuration
-  debug:
-    msg: "Loading CSV + comparing to Proxmox pool state"
-###############################################################################
-# 1. Normalize CSV rows — SAFE LOOP (works in all Ansible versions)
-###############################################################################
-- name: Initialize cleaned CSV list
-  ansible.builtin.set_fact:
-    pools_clean: []
+# roles/pools/tasks/pools_from_csv.yml
+# Simple, reliable Proxmox pool management
 
-- name: Normalize each CSV row
-  ansible.builtin.set_fact:
-    pools_clean: "{{ pools_clean + [ {
-        'poolid': item.poolid,
-        'desired_comment': item.comment | default(''),
-        'desired_vms': (item.vms | default('') | string | trim | split(',') | map('trim') | reject('equalto','') | list),
-        'desired_storage': (item.storage | default('') | string | trim | split(',') | map('trim') | reject('equalto','') | list),
-        'allow_move': (item.allow_move | default('0') | int),
-        'enforce_membership': (item.enforce_membership | default('0') | int)
-    } ] }}"
+- name: Ensure pool exists
+  command:
+    argv:
+      - pvesh
+      - create
+      - /pools
+      - -poolid
+      - "{{ item.poolid }}"
   loop: "{{ pools_csv_list }}"
-  loop_control:
-    label: "{{ item.poolid }}"
-###############################################################################
-# 2. Query current pool state for each poolid listed in CSV
-###############################################################################
-- name: Fetch full pool details including members
-  ansible.builtin.command: >
-    pvesh get /pools/{{ item.poolid }} --output-format json
-  loop: "{{ pools_clean }}"
-  loop_control:
-    label: "{{ item.poolid }}"
-  register: pool_details_raw
-  changed_when: false
+  register: create_pool
+  failed_when: create_pool.rc not in [0, 255]
+  changed_when: create_pool.rc == 0
+
+- name: Apply pool settings (comment, flags)
+  command:
+    argv:
+      - pvesh
+      - set
+      - "/pools/{{ item.poolid }}"
+      - "-comment"
+      - "{{ item.comment | default('') }}"
+      - "-allow-move"
+      - "{{ item.allow_move }}"
+      - "-enforce-membership"
+      - "{{ item.enforce_membership }}"
+  loop: "{{ pools_csv_list }}"
+  register: update_pool
+  failed_when: update_pool.rc not in [0]
+  changed_when: update_pool.rc == 0
+
+- name: Add storage to pool (if defined)
+  command:
+    argv:
+      - pvesh
+      - set
+      - "/pools/{{ item.poolid }}"
+      - "-storage"
+      - "{{ item.storage }}"
+  loop: "{{ pools_csv_list }}"
+  when: item.storage | length > 0
   failed_when: false
-###############################################################################
-# 3. Build merged objects with current pool state
-###############################################################################
+  changed_when: false
 
-- name: Initialize merged list
-  ansible.builtin.set_fact:
-    pool_merged: []
-
-- name: Merge desired + current info
-  ansible.builtin.set_fact:
-    pool_merged: "{{ pool_merged + [ {
-        'poolid': item.0.poolid,
-        'desired_comment': item.0.desired_comment,
-        'desired_vms': item.0.desired_vms,
-        'desired_storage': item.0.desired_storage,
-        'allow_move': item.0.allow_move,
-        'enforce_membership': item.0.enforce_membership,
-        'current': (item.1.stdout | from_json)
-    } ] }}"
-  loop: "{{ pools_clean | zip(pool_details_raw.results) }}"
-  loop_control:
-    label: "{{ item.0.poolid }}"
-
-###############################################################################
-# 4. Display desired vs current state
-###############################################################################
-- name: Show desired vs current pool configuration
-  ansible.builtin.debug:
-    msg:
-      poolid: "{{ item.poolid }}"
-
-      desired_comment: "{{ item.desired_comment }}"
-      desired_vms: "{{ item.desired_vms }}"
-      desired_storage: "{{ item.desired_storage }}"
-      allow_move: "{{ item.allow_move }}"
-      enforce_membership: "{{ item.enforce_membership }}"
-
-      current_comment: "{{ item.current.comment | default('') }}"
-      current_vm_members: >-
-        {{
-          (item.current.members | default([]))
-          | selectattr('type','in',['qemu','lxc'])
-          | map(attribute='vmid')
-          | map('string')
-          | list
-        }}
-      current_storage_members: >-
-        {{
-          (item.current.members | default([]))
-          | selectattr('type','equalto','storage')
-          | map(attribute='storage')
-          | list
-        }}
-  loop: "{{ pool_merged }}"
-  loop_control:
-    label: "{{ item.poolid }}"
-###############################################################################
-# 5. Add missing VMs to pool
-###############################################################################
-- name: Add missing VMs to pool
-  ansible.builtin.command: >
-    pveum pool modify {{ item.poolid }}
-    --vms {{ missing_vms | join(',') }}
-    {{ '--allow-move 1' if item.allow_move == 1 else '' }}
-  vars:
-    current_vms: >-
-      {{
-        item.current.members
-        | selectattr('type','in',['qemu','lxc'])
-        | map(attribute='vmid')
-        | map('string')
-        | list
-      }}
-    missing_vms: >-
-      {{
-        item.desired_vms | difference(current_vms)
-      }}
-  loop: "{{ pool_merged }}"
-  loop_control:
-    label: "{{ item.poolid }}"
-  when: missing_vms | length > 0
-  register: vm_add_result
-  changed_when: vm_add_result.rc == 0
-  failed_when: vm_add_result.rc not in [0]
+- name: Add VMs to pool (if defined)
+  command:
+    argv:
+      - pvesh
+      - set
+      - "/pools/{{ item.poolid }}"
+      - "-vms"
+      - "{{ item.vms }}"
+  loop: "{{ pools_csv_list }}"
+  when: item.vms | length > 0
+  failed_when: false
+  changed_when: false
