@@ -1,2 +1,2 @@
 path,subject,subject_type,roles,propagate
-/pool/web_admin,web_admin,group,web_admin,1
+/pool/web_admin,u_rba_web_admin,group,web_admin,1
