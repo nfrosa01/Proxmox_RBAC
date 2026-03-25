@@ -1,68 +1,58 @@
 ---
 # roles/roles/tasks/roles_from_csv.yml
-# Create/Update Proxmox custom roles from roles.csv — Fully Idempotent Version
+# Create/Update Proxmox custom roles from roles.csv — jq-free version
 
 - name: MARKER — roles/roles_from_csv.yml executing
   debug:
     msg: "Running custom role management from CSV"
 
 ###############################################################################
-# 1) Load existing Proxmox roles in JSON format (safe and structured)
+# 1) Load existing Proxmox roles in JSON format
 ###############################################################################
 - name: Load current PVE roles (JSON)
   ansible.builtin.command: "pveum role list --output-format=json"
   register: pve_roles_json
   changed_when: false
 
-- name: Parse roles into usable list
+- name: Parse roles JSON
   ansible.builtin.set_fact:
     pve_role_list: "{{ pve_roles_json.stdout | from_json }}"
 
-- name: Extract only role IDs
+- name: Extract role IDs
   ansible.builtin.set_fact:
     existing_role_ids: "{{ pve_role_list | map(attribute='roleid') | list }}"
 
 ###############################################################################
-# 2) Normalize desired privileges per role
+# 2) Normalize desired privileges for each CSV role
 ###############################################################################
-- name: Normalize desired privileges for each CSV role
+- name: Normalize desired privileges per role
   ansible.builtin.set_fact:
     desired_privs_list: >-
       {{
         roles_csv_list
         | map(attribute='privs')
-        | map('regex_replace','^\\s+','')
-        | map('regex_replace','\\s+','')
-        | map('split', ',')
-        | map('unique')
-        | map('sort')
-        | map('join', ',')
+        | map('regex_replace','^\\s+','')      # trim leading whitespace
+        | map('regex_replace','\\s+','')       # remove all whitespace
+        | map('split', ',')                    # list of privs
+        | map('unique')                        # dedupe
+        | map('sort')                          # sort for consistency
+        | map('join', ',')                     # back into string
         | list
       }}
   run_once: true
 
 ###############################################################################
-# 3) Extract and normalize current privileges (per role) from PVE
+# 3) Extract and normalize CURRENT privileges for each role
 ###############################################################################
-- name: Extract current privileges for each role
-  ansible.builtin.shell: |
-    set -o pipefail
-    pveum role list --output-format=json | \
-      jq -r '.[] | select(.roleid=="{{ item.roleid }}") | .privs'
-  args:
-    executable: /bin/bash
-  loop: "{{ roles_csv_list }}"
-  loop_control:
-    label: "{{ item.roleid }}"
-  register: raw_current_privs
-  changed_when: false
-
-- name: Normalize current privileges list
+- name: Extract current privileges per role (jq-free)
   ansible.builtin.set_fact:
     current_privs_list: >-
       {{
-        raw_current_privs.results
-        | map(attribute='stdout')
+        roles_csv_list
+        | map(attribute='roleid')
+        | map('extract', pve_role_list, 'roleid')
+        | map('first', default={})
+        | map(attribute='privs', default='')
         | map('regex_replace','^\\s+','')
         | map('regex_replace','\\s+','')
         | map('split', ',')
@@ -75,13 +65,13 @@
   run_once: true
 
 ###############################################################################
-# 4) Debug diff
+# 4) Debug comparison
 ###############################################################################
-- name: DEBUG | role diff summary
+- name: DEBUG | Role diff report
   ansible.builtin.debug:
     msg:
       roleid: "{{ roles_csv_list[idx].roleid }}"
-      exists_in_pve: "{{ roles_csv_list[idx].roleid in existing_role_ids }}"
+      exists: "{{ roles_csv_list[idx].roleid in existing_role_ids }}"
       desired: "{{ desired_privs_list[idx] }}"
       current: "{{ current_privs_list[idx] }}"
       will_add: "{{ roles_csv_list[idx].roleid not in existing_role_ids }}"
@@ -95,9 +85,9 @@
     index_var: idx
 
 ###############################################################################
-# 5) Create missing roles
+# 5) Create roles that do not exist
 ###############################################################################
-- name: Create custom role when it does not exist
+- name: Create role when absent
   ansible.builtin.command: >
     pveum role add {{ roles_csv_list[idx].roleid }}
     --privs "{{ desired_privs_list[idx] }}"
@@ -111,9 +101,9 @@
   failed_when: add_role.rc not in [0]
 
 ###############################################################################
-# 6) Modify existing roles whose privs differ
+# 6) Modify roles whose privileges differ
 ###############################################################################
-- name: Modify custom role when privileges differ
+- name: Modify role when privilege sets differ
   ansible.builtin.command: >
     pveum role modify {{ roles_csv_list[idx].roleid }}
     --privs "{{ desired_privs_list[idx] }}"
