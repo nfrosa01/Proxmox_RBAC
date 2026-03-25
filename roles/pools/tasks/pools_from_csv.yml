@@ -44,24 +44,24 @@
 ###############################################################################
 # 3. Build merged objects with current pool state
 ###############################################################################
-- name: Merge desired + current pool info
+- name: Initialize merged list
   ansible.builtin.set_fact:
-    pool_merged: >-
-      {{
-        range(0, pools_clean | length)
-        | list
-        | map('int')
-        | map('community.general.dict_merge', {
-            'poolid': pools_clean[item].poolid,
-            'desired_vms': pools_clean[item].desired_vms,
-            'desired_storage': pools_clean[item].desired_storage,
-            'allow_move': pools_clean[item].allow_move,
-            'enforce_membership': pools_clean[item].enforce_membership,
-            'desired_comment': pools_clean[item].comment,
-            'current': (pool_details_raw.results[item].stdout | from_json)
-          })
-      }}
+    pool_merged: []
 
+- name: Combine desired + current info row-by-row
+  ansible.builtin.set_fact:
+    pool_merged: "{{ pool_merged + [ {
+        'poolid': item.0.poolid,
+        'desired_comment': item.0.comment,
+        'desired_vms': item.0.desired_vms,
+        'desired_storage': item.0.desired_storage,
+        'allow_move': item.0.allow_move,
+        'enforce_membership': item.0.enforce_membership,
+        'current': (item.1.stdout | from_json)
+    } ] }}"
+  loop: "{{ pools_clean | zip(pool_details_raw.results) }}"
+  loop_control:
+    label: "{{ item.0.poolid }}"
 ###############################################################################
 # 4. Display desired vs current state
 ###############################################################################
