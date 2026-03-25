@@ -1,3 +1,5 @@
+#This file is used by RBAC_Pools template in Semaphore. Adjust pools.csv in the files folder for any changes to a pool. This includes VM's or Storage associated with the pool you are modifying. Set allow-move to 1 on csv if you are moving from one pool to another. 
+#Set 1 to enforce_membership if you don't want VM/Storage in multiple pools.
 ---
 - name: Ensure Proxmox Pools and Memberships from CSV
   hosts: "{{ pve_rbac_node | default('pve01') }}"
