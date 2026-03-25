@@ -1,2 +1,5 @@
 path,subject,subject_type,roles,propagate
 /pool/u_rba_it_enterprise_systems_sa,u_rba_it_enterprise_systems_sa,group,u_rba_it_enterprise_systems_sa,1
+/pool/u_rba_it_network_sa, u_rba_it_network_sa, group,u_rba_it_network_sa
+/pool/u_rba_it_operations_sa, u_rba_it_operations_sa, group, u_rba_it_operations_sa
+/pool/u_rba_it_client_engineering_sa, u_rba_it_client_engineering_sa, group, u_rba_it_client_engineering_sa
