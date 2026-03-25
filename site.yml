@@ -1,3 +1,4 @@
+#This file is used by RBAC_Users template in Semaphore. Adjust users.csv in the files folder for any changes to a user(s). If the group associated with the user does not exist yet in Proxmox, it will be created when the template is run in Semaphore.
 ---
 - name: Update PVE Groups for LDAP Users
   hosts: "{{ pve_rbac_node | default('pve01') }}"
