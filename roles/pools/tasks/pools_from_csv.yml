@@ -25,8 +25,6 @@
       - "{{ item.comment | default('') }}"
       - "-allow-move"
       - "{{ item.allow_move }}"
-      - "-enforce-membership"
-      - "{{ item.enforce_membership }}"
   loop: "{{ pools_csv_list }}"
   register: update_pool
   failed_when: update_pool.rc not in [0]
