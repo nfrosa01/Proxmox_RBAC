@@ -1,162 +1,173 @@
 ---
 # roles/acls/tasks/acl_from_csv.yml
+# Clean, simple, Ansible‑2.13‑safe ACL management
 
 - name: MARKER — ACL management starting
   debug:
     msg: "Applying ACLs from CSV"
 
-# 1) Load current ACL table once
+###############################################################################
+# 1. Normalize each CSV row (simple loop, no Jinja tricks)
+###############################################################################
+
+- name: Initialize normalized ACL list
+  ansible.builtin.set_fact:
+    acl_rows: []
+
+- name: Normalize ACL CSV rows
+  ansible.builtin.set_fact:
+    acl_rows: "{{ acl_rows + [ {
+        'path': item.path,
+        'subject': item.subject,
+        'subject_type': item.subject_type,
+        'roles_raw': item.roles | default(''),
+        'propagate_raw': item.propagate | default('1')
+    } ] }}"
+  loop: "{{ acls_csv_list }}"
+  loop_control:
+    label: "{{ item.path }} :: {{ item.subject }}"
+    
+###############################################################################
+# 2. Normalize desired roles + propagate
+###############################################################################
+
+- name: Normalize desired roles + propagate per CSV row
+  ansible.builtin.set_fact:
+    acl_rows_normalized: "{{ [] }}"
+
+- name: Build normalized ACL data
+  ansible.builtin.set_fact:
+    acl_rows_normalized: "{{ acl_rows_normalized + [ {
+        'path': item.path,
+        'subject': item.subject,
+        'subject_type': item.subject_type,
+        'desired_roles': (item.roles_raw | regex_replace('\\s+', '') | split(',') | reject('equalto','') | list),
+        'desired_propagate': (item.propagate_raw | int)
+    } ] }}"
+  loop: "{{ acl_rows }}"
+  loop_control:
+    label: "{{ item.path }} :: {{ item.subject }}"
+
+###############################################################################
+# 3. Load current ACL table once
+###############################################################################
+
 - name: Load current ACL table
-  ansible.builtin.command: "pveum acl list"
+  ansible.builtin.command: "pveum acl list --noborder"
   register: pve_acl_table
   changed_when: false
 
-# 2) Build helper facts per CSV row (subject selector & CLI switch)
-- name: Build subject selector and CLI switch per row
-  ansible.builtin.set_fact:
-    _subjects: >-
-      {{
-        acls_csv_list
-        | map('combine',
-              {'_cli_switch':
-                ( ' --groups ' if item.subject_type == 'group'
-                  else (' --users ' if item.subject_type == 'user' else ' --tokens ')
-                ) ~ '"' ~ item.subject ~ '"',
-               '_match_key':
-                ( 'Group' if item.subject_type == 'group'
-                  else ('User' if item.subject_type == 'user' else 'Token')
-                )
-              })
-        | list
-      }}
+###############################################################################
+# 4. Extract current ACL roles & propagate for each row
+###############################################################################
 
-# 3) For each row, extract current roles for that (path, subject)
-# pveum acl list prints one line per role mapping. We gather all roles for the row.
-- name: Get current roles at path for subject
-  ansible.builtin.shell: |
-    set -o pipefail
-    pveum acl list | awk -v path="{{ acls_csv_list[idx].path }}" -v key="{{ _subjects[idx]._match_key }}" -v sub="{{ acls_csv_list[idx].subject }}" '
-      BEGIN{FS="|"}
-      $0 ~ "\\|" && $0 ~ path {
-        # columns: | Path | Role | Propagate | Group | User | Token | ...
-        # trim spaces helper
-        function trim(s){gsub(/^[ \t]+|[ \t]+$/, "", s); return s}
-        p=trim($2); r=trim($3); pr=trim($4); g=trim($5); u=trim($6); t=trim($7);
-        if (p==path) {
-          if ( (key=="Group" && g==sub) ||
-               (key=="User"  && u==sub) ||
-               (key=="Token" && t==sub) ) {
-            roles[ r ]=1; props[ pr ]=1;
-          }
-        }
-      }
-      END{
-        # join roles
-        first=1;
-        for (role in roles) { if (!first) printf(","); printf("%s", role); first=0 }
-        printf("\n---\n");
-        # join propagate values (should be one; if multiple, we'll treat as mismatch)
-        first=1;
-        for (pp in props) { if (!first) printf(","); printf("%s", pp); first=0 }
-      }'
-  args:
-    executable: /bin/bash
-  loop: "{{ range(0, acls_csv_list | length) | list }}"
+- name: Initialize merged ACL rows
+  ansible.builtin.set_fact:
+    acl_comparison: []
+
+- name: Build comparison rows
+  ansible.builtin.set_fact:
+    acl_comparison: "{{ acl_comparison + [ {
+        'path': item.path,
+        'subject': item.subject,
+        'subject_type': item.subject_type,
+
+        # desired
+        'desired_roles': item.desired_roles,
+        'desired_propagate': item.desired_propagate,
+
+        # extract current roles + propagate for this subject at this path
+        'current_roles': lookup('community.general.lines', pve_acl_table.stdout)
+                          | select('search', item.path)
+                          | map('split', '|')
+                          | list
+                          | selectattr(4 if item.subject_type=='group'
+                                       else 5 if item.subject_type=='user'
+                                       else 6,
+                                       'equalto', item.subject)
+                          | map('extract', 2)  # role column
+                          | list,
+
+        'current_prop': lookup('community.general.lines', pve_acl_table.stdout)
+                        | select('search', item.path)
+                        | map('split', '|')
+                        | list
+                        | selectattr(4 if item.subject_type=='group'
+                                     else 5 if item.subject_type=='user'
+                                     else 6,
+                                     'equalto', item.subject)
+                        | map('extract', 3)  # propagate column
+                        | list
+    } ] }}"
+  loop: "{{ acl_rows_normalized }}"
   loop_control:
-    index_var: idx
-    label: "{{ acls_csv_list[idx].path }} :: {{ acls_csv_list[idx].subject_type }} :: {{ acls_csv_list[idx].subject }}"
-  register: current_acl_rows
-  changed_when: false
+    label: "{{ item.path }} :: {{ item.subject }}"
+  vars:
+    # community.general.lines returns each line as a string
+    # column indexes refer to: Path|Role|Propagate|Group|User|Token
+    # but since fields start with '|', index shift may vary if formatting differs
+    # This simplifies lookups but remains robust to format
+    # Example: ['','/path','PVEVMAdmin','1','mygroup','','']
 
-# 4) Normalize current roles & propagate per row
-- name: Normalize current roles/propagate
+    # map('extract', #) pulls the nth field
+
+###############################################################################
+# 5. Decide if modification needed (simple Python-like logic)
+###############################################################################
+
+- name: Set modification decisions
   ansible.builtin.set_fact:
-    _current_roles_norm: >-
-      {{
-        current_acl_rows.results
-        | map(attribute='stdout')
-        | map('split','---')
-        | map('first')
-        | map('regex_replace','\\s+','')
-        | map('split',',')
-        | map('reject','equalto','')
-        | map('unique')
-        | map('sort')
-        | map('join',',')
-        | list
-      }}
-    _current_prop_raw: >-
-      {{
-        current_acl_rows.results
-        | map(attribute='stdout')
-        | map('split','---')
-        | map('last')
-        | map('regex_replace','\\s+','')
-        | list
-      }}
-  run_once: true
+    acl_ready: "{{ [] }}"
 
-# 5) Compute desired roles & propagate (normalized)
-- name: Compute desired roles/propagate
+- name: Evaluate each ACL row
   ansible.builtin.set_fact:
-    _desired_roles_norm: >-
-      {{
-        acls_csv_list
-        | map(attribute='roles')
-        | map('regex_replace','\\s+','')
-        | map('split',',')
-        | map('reject','equalto','')
-        | map('unique')
-        | map('sort')
-        | map('join',',')
-        | list
-      }}
-    _desired_prop: >-
-      {{
-        acls_csv_list
-        | map(attribute='propagate')
-        | list
-      }}
-  run_once: true
+    acl_ready: "{{ acl_ready + [ {
+        'path': item.path,
+        'subject': item.subject,
+        'subject_type': item.subject_type,
+        'desired_roles': item.desired_roles,
+        'desired_propagate': item.desired_propagate,
+        'current_roles': item.current_roles,
+        'current_prop': item.current_prop,
 
-# 6) DEBUG — show decision per row
-- name: DEBUG | ACL diff per row
+        'will_modify': (
+            (item.current_roles | difference(item.desired_roles) | length > 0) or
+            (item.desired_roles | difference(item.current_roles) | length > 0) or
+            (
+              item.current_prop | length == 0 or
+              ((item.current_prop | first | int) != item.desired_propagate)
+            )
+        )
+    } ] }}"
+  loop: "{{ acl_comparison }}"
+  loop_control:
+    label: "{{ item.path }} :: {{ item.subject }}"
+
+###############################################################################
+# 6. DEBUG — show decisions
+###############################################################################
+
+- name: DEBUG | ACL decisions
   ansible.builtin.debug:
-    msg:
-      path: "{{ acls_csv_list[idx].path }}"
-      subject: "{{ acls_csv_list[idx].subject }}"
-      subject_type: "{{ acls_csv_list[idx].subject_type }}"
-      desired_roles: "{{ _desired_roles_norm[idx] }}"
-      current_roles: "{{ _current_roles_norm[idx] }}"
-      desired_propagate: "{{ _desired_prop[idx] | default('1') }}"
-      current_propagate_raw: "{{ _current_prop_raw[idx] }}"
-      will_run_modify: >-
-        {{
-          (_current_roles_norm[idx] != _desired_roles_norm[idx])
-          or
-          (_current_prop_raw[idx] | regex_search('(^|,)'+ (_desired_prop[idx] | string) +'(,|$)') | default(false) == false)
-        }}
-  loop: "{{ range(0, acls_csv_list | length) | list }}"
-  loop_control:
-    index_var: idx
+    var: acl_ready
+  run_once: true
 
-# 7) APPLY — set ACL when roles/propagate differ
-- name: Apply ACL (set roles & propagate) when different
+###############################################################################
+# 7. APPLY — modify ACLs where needed
+###############################################################################
+
+- name: Modify ACL on Proxmox when needed
   ansible.builtin.command: >
-    pveum acl modify {{ acls_csv_list[idx].path }}
-    --roles "{{ _desired_roles_norm[idx] }}"
-    {{ _subjects[idx]._cli_switch }}
-    --propagate {{ (_desired_prop[idx] | default('1')) | int }}
-  loop: "{{ range(0, acls_csv_list | length) | list }}"
+    pveum acl modify {{ item.path }}
+      --roles "{{ item.desired_roles | join(',') }}"
+      {{ '--groups ' ~ item.subject if item.subject_type == 'group' else
+         '--users ' ~ item.subject if item.subject_type == 'user' else
+         '--tokens ' ~ item.subject }}
+      --propagate {{ item.desired_propagate }}
+  loop: "{{ acl_ready }}"
   loop_control:
-    index_var: idx
-    label: "{{ acls_csv_list[idx].path }} :: {{ acls_csv_list[idx].subject }}"
-  when: >
-    (_current_roles_norm[idx] != _desired_roles_norm[idx])
-    or
-    (_current_prop_raw[idx] | regex_search('(^|,)'+ (_desired_prop[idx] | string) +'(,|$)') | default(false) == false)
-  register: mod_acl
-  changed_when: mod_acl.rc == 0
-  failed_when: mod_acl.rc not in [0]
-  # If you want this to still run when someone toggles --check by mistake:
-  # check_mode: no
+    label: "{{ item.path }} :: {{ item.subject }}"
+  when: item.will_modify
+  register: acl_apply
+  changed_when: acl_apply.rc == 0
+  failed_when: acl_apply.rc not in [0]
