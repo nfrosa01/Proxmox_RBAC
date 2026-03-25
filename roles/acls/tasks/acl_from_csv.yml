@@ -11,77 +11,70 @@
 ###############################################################################
 
 - name: Initialize normalized ACL list
-  ansible.builtin.set_fact:
+  set_fact:
     acl_rows: []
 
-- name: Convert CSV rows into normalized objects
-  ansible.builtin.set_fact:
+- name: Normalize ACL rows
+  set_fact:
     acl_rows: "{{ acl_rows + [ {
         'path': item.path,
         'subject': item.subject,
         'subject_type': item.subject_type,
-        'desired_roles': (item.roles | default('') | string | trim
-                          | split(',') | map('trim') | reject('equalto','') | list),
+        'desired_roles': (item.roles | default('') | trim | split(',') | map('trim') | reject('equalto','') | list),
         'desired_propagate': (item.propagate | default('1') | int)
     } ] }}"
   loop: "{{ acls_csv_list }}"
-  loop_control:
-    label: "{{ item.path }} :: {{ item.subject }}"
-
+  
 ###############################################################################
 # 2. Load current ACL table (JSON)
 ###############################################################################
 
 - name: Load current ACLs (JSON)
-  ansible.builtin.command: >
-    pvesh get /access/acl --output-format json
+  command: "pvesh get /access/acl --output-format json"
   register: pve_acl_raw
   changed_when: false
 
 - name: Parse ACL JSON
-  ansible.builtin.set_fact:
+  set_fact:
     pve_acls: "{{ pve_acl_raw.stdout | from_json }}"
 
 ###############################################################################
 # 3. Build merged list (desired + current) row-by-row
 ###############################################################################
 
-- name: Initialize merged ACL rows
-  ansible.builtin.set_fact:
+- name: Init merged ACL list
+  set_fact:
     acl_merged: []
 
-- name: Merge desired + current per ACL row
-  ansible.builtin.set_fact:
-    acl_merged: "{{ acl_merged + [ merged_row ] }}"
+- name: Merge desired + current row-by-row
+  set_fact:
+    acl_merged: "{{ acl_merged + [ merged ] }}"
   vars:
-    merged_row: >-
-      {%- set cur = [] %}
-      {%- set curprop = [] %}
-      {%- for entry in pve_acls %}
-        {%- if entry.path == item.path %}
-          {%- if item.subject_type == 'group' and (entry.group or '') == item.subject %}
-            {%- set _ = cur.append(entry.roleid) %}
-            {%- set _ = curprop.append(entry.propagate | int) %}
-          {%- endif %}
-          {%- if item.subject_type == 'user' and (entry.userid or '') == item.subject %}
-            {%- set _ = cur.append(entry.roleid) %}
-            {%- set _ = curprop.append(entry.propagate | int) %}
-          {%- endif %}
-          {%- if item.subject_type == 'token' and (entry.tokenid or '') == item.subject %}
-            {%- set _ = cur.append(entry.roleid) %}
-            {%- set _ = curprop.append(entry.propagate | int) %}
-          {%- endif %}
-        {%- endif %}
-      {%- endfor %}
-      {
-        'path': item.path,
-        'subject': item.subject,
-        'subject_type': item.subject_type,
-        'desired_roles': item.desired_roles,
-        'desired_propagate': item.desired_propagate,
-        'current_roles': cur,
-        'current_propagate': (curprop[0] if curprop else None)
-      }
+    current_entries: >-
+      {{
+        pve_acls
+        | selectattr('path','equalto', item.path)
+        | selectattr(
+            item.subject_type == 'group' and 'ugid' or
+            item.subject_type == 'user'  and 'userid' or
+            item.subject_type == 'token' and 'tokenid',
+            'equalto',
+            item.subject
+          )
+        | list
+      }}
+
+    current_roles: "{{ current_entries | map(attribute='roleid') | list }}"
+    current_prop: "{{ (current_entries | map(attribute='propagate') | list | first) | default(None) }}"
+
+    merged:
+      path: "{{ item.path }}"
+      subject: "{{ item.subject }}"
+      subject_type: "{{ item.subject_type }}"
+      desired_roles: "{{ item.desired_roles }}"
+      desired_propagate: "{{ item.desired_propagate }}"
+      current_roles: "{{ current_roles }}"
+      current_propagate: "{{ current_prop }}"
   loop: "{{ acl_rows }}"
   loop_control:
     label: "{{ item.path }} :: {{ item.subject }}"
@@ -100,21 +93,19 @@
 ###############################################################################
 
 - name: Apply ACL changes
-  ansible.builtin.command: >
+  command: >
     pveum acl modify {{ item.path }}
     --roles "{{ item.desired_roles | join(',') }}"
-    {% if item.subject_type == 'group' %} --groups "{{ item.subject }}"
-    {% elif item.subject_type == 'user' %} --users "{{ item.subject }}"
-    {% else %} --tokens "{{ item.subject }}"
-    {% endif %}
+    {{ '--groups ' ~ item.subject if item.subject_type == 'group' else '' }}
+    {{ '--users ' ~ item.subject if item.subject_type == 'user' else '' }}
+    {{ '--tokens ' ~ item.subject if item.subject_type == 'token' else '' }}
     --propagate {{ item.desired_propagate }}
   loop: "{{ acl_merged }}"
   loop_control:
     label: "{{ item.path }} :: {{ item.subject }}"
   when: >
-    (item.current_roles | sort != item.desired_roles | sort)
-    or
+    (item.current_roles | sort != item.desired_roles | sort) or
     (item.current_propagate != item.desired_propagate)
-  register: acl_apply
-  changed_when: acl_apply.rc == 0
-  failed_when: acl_apply.rc not in [0]
+  register: acl_modify
+  changed_when: acl_modify.rc == 0
+  failed_when: acl_modify.rc not in [0]
