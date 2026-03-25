@@ -1,30 +1,40 @@
 ---
-# READ‑ONLY: list all pools + comments + members
+# READ-ONLY: show desired values from CSV + actual pool state from Proxmox
 
-- name: MARKER — Listing all pools with members
+- name: MARKER — Listing desired + current pool configuration
   debug:
-    msg: "Collecting Proxmox pool information"
+    msg: "Loading CSV + comparing to Proxmox pool state"
 
 ###############################################################################
-# 1. Get list of pools (no members here)
+# 1. Normalize CSV rows into desired_* fields
 ###############################################################################
-- name: Fetch pool list (top level)
-  ansible.builtin.command: >
-    pvesh get /pools --output-format json
-  register: pool_list_raw
-  changed_when: false
-
-- name: Parse pool list JSON
+- name: Normalize CSV rows
   ansible.builtin.set_fact:
-    pool_list: "{{ pool_list_raw.stdout | from_json }}"
+    pools_clean: >-
+      {{
+        pools_csv_list
+        | map('combine', {
+            'desired_vms': (
+              item.vms | default('') | string | trim
+              | split(',') | map('trim') | reject('equalto','') | list
+            ),
+            'desired_storage': (
+              item.storage | default('') | string | trim
+              | split(',') | map('trim') | reject('equalto','') | list
+            ),
+            'allow_move': (item.allow_move | default('0') | int),
+            'enforce_membership': (item.enforce_membership | default('0') | int)
+          })
+        | list
+      }}
 
 ###############################################################################
-# 2. For each pool → fetch details with members
+# 2. Query current pool state for each poolid listed in CSV
 ###############################################################################
 - name: Fetch full pool details including members
   ansible.builtin.command: >
     pvesh get /pools/{{ item.poolid }} --output-format json
-  loop: "{{ pool_list }}"
+  loop: "{{ pools_clean }}"
   loop_control:
     label: "{{ item.poolid }}"
   register: pool_details_raw
@@ -32,42 +42,56 @@
   failed_when: false
 
 ###############################################################################
-# 3. Parse each detail response safely
+# 3. Build merged objects with current pool state
 ###############################################################################
-- name: Build structured pool info
+- name: Merge desired + current pool info
   ansible.builtin.set_fact:
-    pools_full: >-
+    pool_merged: >-
       {{
-        pool_details_raw.results
-        | map(attribute='stdout')
-        | map('default','{}')
-        | map('from_json')
+        range(0, pools_clean | length)
         | list
+        | map('int')
+        | map('community.general.dict_merge', {
+            'poolid': pools_clean[item].poolid,
+            'desired_vms': pools_clean[item].desired_vms,
+            'desired_storage': pools_clean[item].desired_storage,
+            'allow_move': pools_clean[item].allow_move,
+            'enforce_membership': pools_clean[item].enforce_membership,
+            'desired_comment': pools_clean[item].comment,
+            'current': (pool_details_raw.results[item].stdout | from_json)
+          })
       }}
 
 ###############################################################################
-# 4. Display results
+# 4. Display desired vs current state
 ###############################################################################
-- name: Display pool info
+- name: Show desired vs current pool configuration
   ansible.builtin.debug:
     msg:
       poolid: "{{ item.poolid }}"
-      comment: "{{ item.comment | default('') }}"
-      vm_members: >-
+
+      desired_comment: "{{ item.desired_comment }}"
+      desired_vms: "{{ item.desired_vms }}"
+      desired_storage: "{{ item.desired_storage }}"
+      allow_move: "{{ item.allow_move }}"
+      enforce_membership: "{{ item.enforce_membership }}"
+
+      current_comment: "{{ item.current.comment | default('') }}"
+      current_vm_members: >-
         {{
-          (item.members | default([]))
+          (item.current.members | default([]))
           | selectattr('type','in',['qemu','lxc'])
           | map(attribute='vmid')
           | map('string')
           | list
         }}
-      storage_members: >-
+      current_storage_members: >-
         {{
-          (item.members | default([]))
+          (item.current.members | default([]))
           | selectattr('type','equalto','storage')
           | map(attribute='storage')
           | list
         }}
-  loop: "{{ pools_full }}"
+  loop: "{{ pool_merged }}"
   loop_control:
     label: "{{ item.poolid }}"
