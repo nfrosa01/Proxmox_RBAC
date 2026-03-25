@@ -26,7 +26,45 @@
       }}
   run_once: true
 
+###############################################################################
+# Ensure all groups from CSV exist in Proxmox
+###############################################################################
+- name: Fetch existing Proxmox groups
+  ansible.builtin.command: "pveum group list --noborder --noheader"
+  register: existing_groups_raw
+  changed_when: false
+
+# Parse group names from output (column 1)
+- name: Parse existing groups
+  ansible.builtin.set_fact:
+    existing_groups: >-
+      {{
+        existing_groups_raw.stdout_lines
+        | map('split')
+        | map('first')
+        | list
+      }}
+
+- name: Compute missing groups
+  ansible.builtin.set_fact:
+    missing_groups: "{{ _csv_groups | difference(existing_groups) }}"
+
+- name: DEBUG | Missing PVE groups that will be created
+  ansible.builtin.debug:
+    var: missing_groups
+
+- name: Create missing PVE groups
+  ansible.builtin.command: >
+    pveum group add {{ item }}
+  loop: "{{ missing_groups }}"
+  loop_control:
+    label: "{{ item }}"
+  register: pve_group_add
+  changed_when: pve_group_add.rc == 0
+  failed_when: pve_group_add.rc not in [0]
+###############################################################################
 # Load the full PVE user table (used to validate user existence & realm spelling)
+###############################################################################
 - name: Load current PVE user table
   ansible.builtin.command: "pveum user list"
   register: pve_users_table
