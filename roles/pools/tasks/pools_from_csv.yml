@@ -43,18 +43,16 @@
   ansible.builtin.set_fact:
     pool_merged: []
 
-- name: Merge desired + current info (safe loop)
+- name: Merge desired + current info
   ansible.builtin.set_fact:
     pool_merged: "{{ pool_merged + [ {
         'poolid': item.0.poolid,
-
         # desired values from CSV
         'desired_comment': item.0.desired_comment,
         'desired_vms': item.0.desired_vms,
         'desired_storage': item.0.desired_storage,
         'allow_move': item.0.allow_move,
         'enforce_membership': item.0.enforce_membership,
-
         # current values from Proxmox API
         'current': (item.1.stdout | from_json)
     } ] }}"
