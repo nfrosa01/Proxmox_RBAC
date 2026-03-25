@@ -6,28 +6,26 @@
     msg: "Loading CSV + comparing to Proxmox pool state"
 
 ###############################################################################
-# 1. Normalize CSV rows into desired_* fields
+# 1. Normalize CSV rows — SAFE LOOP (works in all Ansible versions)
 ###############################################################################
-- name: Normalize CSV rows
-  ansible.builtin.set_fact:
-    pools_clean: >-
-      {{
-        pools_csv_list
-        | map('combine', {
-            'desired_vms': (
-              item.vms | default('') | string | trim
-              | split(',') | map('trim') | reject('equalto','') | list
-            ),
-            'desired_storage': (
-              item.storage | default('') | string | trim
-              | split(',') | map('trim') | reject('equalto','') | list
-            ),
-            'allow_move': (item.allow_move | default('0') | int),
-            'enforce_membership': (item.enforce_membership | default('0') | int)
-          })
-        | list
-      }}
 
+- name: Initialize cleaned CSV list
+  ansible.builtin.set_fact:
+    pools_clean: []
+
+- name: Normalize each CSV row
+  ansible.builtin.set_fact:
+    pools_clean: "{{ pools_clean + [ {
+        'poolid': item.poolid,
+        'desired_comment': item.comment | default(''),
+        'desired_vms': (item.vms | default('') | string | trim | split(',') | map('trim') | reject('equalto','') | list),
+        'desired_storage': (item.storage | default('') | string | trim | split(',') | map('trim') | reject('equalto','') | list),
+        'allow_move': (item.allow_move | default('0') | int),
+        'enforce_membership': (item.enforce_membership | default('0') | int)
+    } ] }}"
+  loop: "{{ pools_csv_list }}"
+  loop_control:
+    label: "{{ item.poolid }}"
 ###############################################################################
 # 2. Query current pool state for each poolid listed in CSV
 ###############################################################################
