@@ -1,2 +1,6 @@
 poolid,comment,vms,storage,allow_move,enforce_membership
-u_rba_it_enterprise_systems_sa,,,"local-lvm",1,1
+Enterprise Systems,,,,1,1
+Networking,,,,1,1
+IT Operations,,,,1,1
+Endpoing Engineering,,,,1,1
+Application Admin,,,,1,1
