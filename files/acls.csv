@@ -1,5 +1,6 @@
 path,subject,subject_type,roles,propagate
-/pool/u_rba_it_enterprise_systems_sa,u_rba_it_enterprise_systems_sa,group,u_rba_it_enterprise_systems_sa,1
-/pool/u_rba_it_network_sa, u_rba_it_network_sa, group,u_rba_it_network_sa,1
-/pool/u_rba_it_operations_sa, u_rba_it_operations_sa, group, u_rba_it_operations_sa,1
-/pool/u_rba_it_client_engineering_sa, u_rba_it_client_engineering_sa, group, u_rba_it_client_engineering_sa,1
+Enterprise_Systems,u_rba_it_enterprise_systems_sa,group,u_rba_it_enterprise_systems_sa,1
+Networking, u_rba_it_network_sa, group,u_rba_it_network_sa,1
+IT_Operations, u_rba_it_operations_sa, group, u_rba_it_operations_sa,1
+Endpoint_Engineering, u_rba_it_client_engineering_sa, group, u_rba_it_client_engineering_sa,1
+Application_Admin, uas_app_admin,group,uas_app_admin,1
