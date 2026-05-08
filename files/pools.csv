@@ -1,6 +1,6 @@
 poolid,comment,vms,storage,allow_move,enforce_membership
-Enterprise Systems,,,,1,1
+Enterprise_Systems,,,,1,1
 Networking,,,,1,1
-IT Operations,,,,1,1
-Endpoing Engineering,,,,1,1
-Application Admin,,,,1,1
+IT_Operations,,,,1,1
+Endpoing_Engineering,,,,1,1
+Application_Admin,,,,1,1
