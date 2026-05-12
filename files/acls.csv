@@ -4,3 +4,5 @@ Networking, u_rba_it_network_sa, group,u_rba_it_network_sa,1
 IT_Operations, u_rba_it_operations_sa, group, u_rba_it_operations_sa,1
 Endpoint_Engineering, u_rba_it_client_engineering_sa, group, u_rba_it_client_engineering_sa,1
 Application_Admin, uas_app_admin,group,uas_app_admin,1
+Backup_and_Recovery, u_rba_it_enterprise_backup_and_recovery_sa,1
+Directory_Services, u_rba_it_directory_services_sa,1
