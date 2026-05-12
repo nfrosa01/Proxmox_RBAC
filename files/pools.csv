@@ -1,6 +1,7 @@
 poolid,comment,vms,storage,allow_move,enforce_membership
 Enterprise_Systems,,,,1,1
-Networking,,,,1,1
+Networking,,SP-HLTVDHCP03,,1,1
 IT_Operations,,,,1,1
-Endpoint_Engineering,,,,1,1
-Application_Admin,,,,1,1
+Endpoint_Engineering,,SPHLTV-RFMGR01,,1,1
+Application_Admin,,SPHLTV-DVR02,,1,1
+Backup_and_Recovery,,,SPHLTV-CVMA01,,1,1
