@@ -1,9 +1,9 @@
 path,subject,subject_type,roles,propagate
 /pool/Enterprise_Systems,uas_enterprise_systems,group,uas_enterprise_systems_sa,1
+/,uas_enterprise_systems,group,uas_enterprise_systems_sa,1
 /pool/Networking, uas_network_team, group,uas_network_team,1
 /pool/IT_Operations, u_rba_it_operations_sa, group, u_rba_it_operations_sa,1
 /pool/Endpoint_Engineering, uas_endpoint_eng, group, uas_endpoint_eng_sa,1
 /pool/Application_Admin, uas_app_admin,group,uas_app_admin,1
 /pool/Backup_and_Recovery, u_rba_it_enterprise_backup_and_recovery_sa,group,u_rba_it_enterprise_backup_and_recovery,1
 /pool/Directory_Services, uas_directory_services,group,uas_directory_services,1
-/do we want a separate pool for eS systems and our admin privs?
