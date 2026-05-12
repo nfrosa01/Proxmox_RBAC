@@ -35,6 +35,13 @@ DD851249, Dart,u_rba_it_operations_sa
 sa855042,Dart,u_rba_it_enterprise_backup_and_recovery_sa
 sa867183,Dart,u_rba_it_enterprise_backup_and_recovery_sa
 sa54827,Dart,u_rba_it_enterprise_backup_and_recovery_sa
-sa43075,Dart,uas directory services
-sa31979,Dart,uas directory services
-sa924675,Dart,uas directory services
+sa43075,Dart,uas_directory_services
+sa31979,Dart,uas_directory_services
+sa924675,Dart,uas_directory_services
+sa500020,Dart,uas_app_admin
+sa500017,Dart,uas_app_admin
+sa74532,Dart,uas_app_admin
+sa850828,Dart,uas_app_admin
+sa856030,Dart,uas_app_admin
+sa912657,Dart,uas_app_admin
+sa852602,Dart,uas_app_admin
